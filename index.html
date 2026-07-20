@@ -25,6 +25,9 @@ header h1{font-size:26px;margin:0;}
 .reqExtra{font-size:14px;color:#666;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .empty{text-align:center;color:#888;font-size:15px;margin:24px 0;}
 .fab{position:fixed;right:20px;bottom:20px;width:60px;height:60px;border-radius:50%;background:#14264d;color:white;border:none;font-size:28px;box-shadow:0 4px 10px rgba(0,0,0,.3);z-index:500;}
+.toast{display:none;position:fixed;top:16px;left:50%;transform:translateX(-50%);max-width:90%;background:#2e9d45;color:white;padding:16px 22px;border-radius:14px;font-size:16px;font-weight:bold;box-shadow:0 4px 14px rgba(0,0,0,.3);z-index:2000;text-align:center;line-height:1.5;}
+.toast.show{display:block;}
+.toast.error{background:#c0392b;}
 
 .modalScreen{display:none;position:fixed;inset:0;background:#eef1f6;z-index:998;overflow-y:auto;}
 .modalScreen.show{display:block;}
@@ -104,6 +107,7 @@ body{background:white;padding-bottom:0;}
 </style>
 </head>
 <body>
+<div class="toast" id="globalToast"></div>
 <header>
 <button class="installIconBtn" id="installIconBtn" style="display:none;" onclick="installApp()">📲</button>
 <h1>🚜 機械作業</h1>
@@ -129,7 +133,6 @@ body{background:white;padding-bottom:0;}
 </div>
 <div class="box" id="mainBox">
 <input type="hidden" id="editEntryId">
-<div class="savedMsg" id="savedMsg">✅ 保存しました（配車ボードにも反映されます）</div>
 <div class="linkNote">📋 保存すると配車ボードの「通常」または「常務」にも表示されます。過ぎた回収日の記録は自動的に削除されます。会社名は配車ボードの取引先と連動します。</div>
 
 <div class="field">
@@ -721,27 +724,28 @@ boardSyncErrorText=(err && err.message)?err.message:String(err);
 console.error("配車ボード連携に失敗しました（機械作業アプリ側の保存は成功しています）:",err);
 }
 
-const msg=document.getElementById("savedMsg");
-if(boardSyncFailed){
-msg.style.background="#fdecea";
-msg.style.color="#c0392b";
-msg.style.borderColor="#c0392b";
-msg.textContent="⚠️ 機械作業の保存はできましたが、配車ボードへの反映に失敗しました（"+boardSyncErrorText+"）";
-msg.style.display="block";
-setTimeout(function(){
-msg.style.display="none";
-msg.style.background="";
-msg.style.color="";
-msg.style.borderColor="";
-msg.textContent="✅ 保存しました（配車ボードにも反映されます）";
-},6000);
-}else{
-msg.style.display="block";
-setTimeout(function(){msg.style.display="none";},2500);
-}
+const wasEditing=!!editId;
 clearForm();
 document.getElementById("editEntryId").value="";
 document.getElementById("settingsTitle").textContent="予定を追加";
+closeSettings();
+
+if(boardSyncFailed){
+showToast("⚠️ 機械作業の保存はできましたが、配車ボードへの反映に失敗しました（"+boardSyncErrorText+"）",true,6000);
+}else{
+showToast(wasEditing?"✅ 更新しました。一覧に反映されています":"✅ 保存しました。一覧に追加されました",false,3000);
+}
+}
+
+function showToast(text,isError,duration){
+const toast=document.getElementById("globalToast");
+toast.textContent=text;
+toast.classList.toggle("error",!!isError);
+toast.classList.add("show");
+clearTimeout(toast._hideTimer);
+toast._hideTimer=setTimeout(function(){
+toast.classList.remove("show");
+},duration||3000);
 }
 
 function shareFormLine(){
