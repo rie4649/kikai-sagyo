@@ -453,11 +453,11 @@ function loadClients(){
 haishaClientsRef.orderBy("name").onSnapshot(function(snap){
 clientsNormal=[];
 snap.forEach(function(doc){clientsNormal.push(Object.assign({id:doc.id},doc.data()));});
-});
+},function(err){console.error("取引先(通常)の読み込みに失敗しました:",err);});
 haishaClientsJomuRef.orderBy("name").onSnapshot(function(snap){
 clientsJomu=[];
 snap.forEach(function(doc){clientsJomu.push(Object.assign({id:doc.id},doc.data()));});
-});
+},function(err){console.error("取引先(常務)の読み込みに失敗しました:",err);});
 }
 
 const companyInput=document.getElementById("companyName");
@@ -525,6 +525,10 @@ document.getElementById("manifestAriBtn").classList.toggle("active",v==="あり"
 function openGoogleMaps(){
 const addr=document.getElementById("address").value.trim();
 if(!addr){alert("住所を入力してください");return;}
+openMapsFor(addr);
+}
+function openMapsFor(addr){
+if(!addr)return;
 const url="https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(addr);
 window.open(url,"_blank");
 }
@@ -571,7 +575,7 @@ if(data.date)lines.push("回収日："+data.date);
 if(data.arriveTime)lines.push("時間指定（着）："+data.arriveTime);
 lines.push("会社名："+data.company);
 if(data.pickupPlace)lines.push("引き取り場所："+data.pickupPlace);
-if(data.address)lines.push("住所："+data.address);
+if(data.address)lines.push("住所："+data.address+"__MAPLINK__");
 if(data.department)lines.push("部署："+data.department);
 if(data.contactPerson)lines.push("担当者："+data.contactPerson);
 if(data.phone)lines.push("電話番号："+data.phone);
@@ -584,6 +588,10 @@ lines.push("ETC使用："+(data.etcUse==="あり"?("あり（"+(data.etcCount||1
 lines.push("マニフェスト："+(data.manifestHas||"なし"));
 if(data.notes)lines.push("備考："+data.notes);
 return lines;
+}
+
+function plainSummaryLines(data){
+return buildSummaryLines(data).map(function(line){return line.replace("__MAPLINK__","");});
 }
 
 function contentPreview(data){
@@ -633,6 +641,7 @@ notes:buildBoardNotes(data)
 // 会社名から取引先IDを解決する（候補選択済みならそれを使い、無ければ既存一致 or 新規登録）
 async function resolveCompanyId(data){
 if(data.companyId)return data.companyId;
+try{
 const source=data.listType==="jomu"?clientsJomu:clientsNormal;
 const existing=source.find(function(c){return c.name===data.company;});
 if(existing)return existing.id;
@@ -655,35 +664,56 @@ createdAt:firebase.firestore.FieldValue.serverTimestamp()
 };
 const docRef=await collectionRef.add(newClient);
 return docRef.id;
+}catch(err){
+console.error("取引先の連携に失敗しました（スキップします）:",err);
+return null;
+}
 }
 
 // ==== 保存（新規 / 編集の両対応）====
+// 重要：機械作業アプリ自体の保存(machineMoves)を最優先で必ず完了させる。
+// 配車ボード連携(haishaBoard・取引先の自動登録)は別処理とし、そちらが失敗しても
+// 機械作業アプリ側の保存が巻き込まれて失敗しないようにする。
 async function saveRequest(){
 const data=collectData();
 if(!validate(data))return;
 const editId=document.getElementById("editEntryId").value;
+let savedId=editId;
+
+try{
+if(editId){
+const record=Object.assign({},data,{updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+await colRef.doc(editId).update(record);
+}else{
+const record=Object.assign({},data,{createdAt:firebase.firestore.FieldValue.serverTimestamp(),createdAtText:new Date().toLocaleString()});
+const docRef=await colRef.add(record);
+savedId=docRef.id;
+}
+}catch(err){
+alert("保存に失敗しました。通信を確認してください。");
+console.error("machineMoves保存エラー:",err);
+return;
+}
+
+// ここまでで機械作業アプリ自体の保存は完了。ここから先は配車ボード連携（失敗しても本体には影響しない）
 try{
 const companyId=await resolveCompanyId(data);
 data.companyId=companyId;
+if(companyId){
+colRef.doc(savedId).update({companyId:companyId}).catch(function(){});
+}
 const boardEntryBase=buildBoardEntry(data);
+const existing=editId?requestCache.find(function(r){return r.id===editId;}):null;
 
-if(editId){
-const existing=requestCache.find(function(r){return r.id===editId;});
-const record=Object.assign({},data,{updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
-await colRef.doc(editId).update(record);
 if(existing && existing.boardId){
 await haishaBoardRef.doc(existing.boardId).update(boardEntryBase);
 }else{
 const boardData=Object.assign({},boardEntryBase,{status:"pending",createdAtMs:Date.now(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});
 const boardDoc=await haishaBoardRef.add(boardData);
-await colRef.doc(editId).update({boardId:boardDoc.id});
+await colRef.doc(savedId).update({boardId:boardDoc.id});
 }
-}else{
-const record=Object.assign({},data,{createdAt:firebase.firestore.FieldValue.serverTimestamp(),createdAtText:new Date().toLocaleString()});
-const docRef=await colRef.add(record);
-const boardData=Object.assign({},boardEntryBase,{status:"pending",createdAtMs:Date.now(),createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-const boardDoc=await haishaBoardRef.add(boardData);
-await colRef.doc(docRef.id).update({boardId:boardDoc.id});
+}catch(err){
+console.error("配車ボード連携に失敗しました（機械作業アプリ側の保存は成功しています）:",err);
 }
 
 const msg=document.getElementById("savedMsg");
@@ -692,16 +722,12 @@ setTimeout(function(){msg.style.display="none";},2500);
 clearForm();
 document.getElementById("editEntryId").value="";
 document.getElementById("settingsTitle").textContent="予定を追加";
-}catch(err){
-alert("保存に失敗しました。通信を確認してください。");
-console.error(err);
-}
 }
 
 function shareFormLine(){
 const data=collectData();
 if(!validate(data))return;
-const text="【機械作業】\n"+buildSummaryLines(data).join("\n");
+const text="【機械作業】\n"+plainSummaryLines(data).join("\n");
 const url="https://line.me/R/msg/text/?"+encodeURIComponent(text);
 window.open(url,"_blank");
 }
@@ -807,9 +833,18 @@ if(!item)return;
 currentDetailId=id;
 const lines=buildSummaryLines(item);
 const detailHtml=lines.map(function(line){
-const idx=line.indexOf("：");
-if(idx===-1)return "<div class='detailRow'>"+escapeHtml(line)+"</div>";
-return "<div class='detailRow'><b>"+escapeHtml(line.slice(0,idx+1))+"</b>"+escapeHtml(line.slice(idx+1))+"</div>";
+const isMapLine=line.indexOf("__MAPLINK__")!==-1;
+const cleanLine=line.replace("__MAPLINK__","");
+const idx=cleanLine.indexOf("：");
+if(idx===-1)return "<div class='detailRow'>"+escapeHtml(cleanLine)+"</div>";
+const label=cleanLine.slice(0,idx+1);
+const rest=cleanLine.slice(idx+1);
+if(isMapLine){
+const safeAddr=rest.replace(/'/g,"\\'");
+return "<div class='detailRow'><b>"+escapeHtml(label)+"</b>"+escapeHtml(rest)+
+" <button style='background:#1a73e8;color:white;border:none;border-radius:8px;padding:4px 12px;font-size:13px;font-weight:bold;' onclick=\"openMapsFor('"+safeAddr+"')\">🗺 地図</button></div>";
+}
+return "<div class='detailRow'><b>"+escapeHtml(label)+"</b>"+escapeHtml(rest)+"</div>";
 }).join("");
 document.getElementById("modalBox").innerHTML=
 detailHtml+
@@ -877,13 +912,13 @@ document.getElementById("settingsScreen").classList.add("show");
 function shareDetailLine(id){
 const item=requestCache.find(function(r){return r.id===id;});
 if(!item)return;
-const text="【機械作業】\n"+buildSummaryLines(item).join("\n");
+const text="【機械作業】\n"+plainSummaryLines(item).join("\n");
 const url="https://line.me/R/msg/text/?"+encodeURIComponent(text);
 window.open(url,"_blank");
 }
 
 function fillPrintBox(item){
-const lines=buildSummaryLines(item);
+const lines=plainSummaryLines(item);
 document.getElementById("printBoxBody").innerHTML=lines.map(function(line){
 const idx=line.indexOf("：");
 if(idx===-1)return "<div>"+escapeHtml(line)+"</div>";
