@@ -22,6 +22,7 @@ header h1{font-size:26px;margin:0;}
 .reqTag{font-size:13px;font-weight:bold;padding:4px 12px;border-radius:999px;background:#e8ecf4;color:#14264d;}
 .reqClient{font-size:23px;font-weight:bold;color:#222;margin-bottom:6px;}
 .reqContent{font-size:16px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.reqExtra{font-size:14px;color:#666;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .empty{text-align:center;color:#888;font-size:15px;margin:24px 0;}
 .fab{position:fixed;right:20px;bottom:20px;width:60px;height:60px;border-radius:50%;background:#14264d;color:white;border:none;font-size:28px;box-shadow:0 4px 10px rgba(0,0,0,.3);z-index:500;}
 
@@ -696,6 +697,8 @@ return;
 }
 
 // ここまでで機械作業アプリ自体の保存は完了。ここから先は配車ボード連携（失敗しても本体には影響しない）
+let boardSyncFailed=false;
+let boardSyncErrorText="";
 try{
 const companyId=await resolveCompanyId(data);
 data.companyId=companyId;
@@ -713,12 +716,29 @@ const boardDoc=await haishaBoardRef.add(boardData);
 await colRef.doc(savedId).update({boardId:boardDoc.id});
 }
 }catch(err){
+boardSyncFailed=true;
+boardSyncErrorText=(err && err.message)?err.message:String(err);
 console.error("配車ボード連携に失敗しました（機械作業アプリ側の保存は成功しています）:",err);
 }
 
 const msg=document.getElementById("savedMsg");
+if(boardSyncFailed){
+msg.style.background="#fdecea";
+msg.style.color="#c0392b";
+msg.style.borderColor="#c0392b";
+msg.textContent="⚠️ 機械作業の保存はできましたが、配車ボードへの反映に失敗しました（"+boardSyncErrorText+"）";
+msg.style.display="block";
+setTimeout(function(){
+msg.style.display="none";
+msg.style.background="";
+msg.style.color="";
+msg.style.borderColor="";
+msg.textContent="✅ 保存しました（配車ボードにも反映されます）";
+},6000);
+}else{
 msg.style.display="block";
 setTimeout(function(){msg.style.display="none";},2500);
+}
 clearForm();
 document.getElementById("editEntryId").value="";
 document.getElementById("settingsTitle").textContent="予定を追加";
@@ -789,6 +809,13 @@ listBox.innerHTML=sorted.map(renderCard).join("");
 }
 
 function renderCard(item){
+const extraLines=[];
+if(item.workContent)extraLines.push("🔧 "+item.workContent);
+if(item.workers && item.workers.length)extraLines.push("👷 "+item.workers.join("、"));
+if(item.pickupPlace)extraLines.push("📍 "+item.pickupPlace);
+const extraHtml=extraLines.map(function(line){
+return "<div class='reqExtra'>"+escapeHtml(line)+"</div>";
+}).join("");
 return "<div class='reqCard' onclick=\"openDetail('"+item.id+"')\">"+
 "<div class='reqTop'>"+
 "<div class='reqDate'>"+escapeHtml(item.date||"-")+(item.arriveTime?" "+escapeHtml(item.arriveTime):"")+"</div>"+
@@ -796,6 +823,7 @@ return "<div class='reqCard' onclick=\"openDetail('"+item.id+"')\">"+
 "</div>"+
 "<div class='reqClient'>"+escapeHtml(item.company||"-")+"</div>"+
 "<div class='reqContent'>"+escapeHtml(contentPreview(item))+"</div>"+
+extraHtml+
 "</div>";
 }
 
